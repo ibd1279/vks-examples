@@ -151,7 +151,8 @@ func (app *TriangleApplication) glfwSetup() error {
 	return nil
 }
 func (app *TriangleApplication) vulkanSetup() error {
-	var extensions []string
+	arp := vks.NewAutoReleaser()
+	defer arp.Release()
 
 	// This is a debug function, mostly to dump the instance options.
 	// Useful to understand Whats available and what isn't working.
@@ -168,8 +169,7 @@ func (app *TriangleApplication) vulkanSetup() error {
 		}
 
 		for _, layer := range append([]string{""}, app.SelectInstanceLayers...) {
-			ln := vks.NewCString(layer)
-			defer vks.FreeCString(ln)
+			ln := vks.NewCStr(arp, layer)
 
 			result = vks.EnumerateInstanceExtensionProperties(
 				ln,
@@ -207,25 +207,28 @@ func (app *TriangleApplication) vulkanSetup() error {
 		// for an explanation of the common pattern
 
 		// Create the info object
-		extensions = append(
+		extensions := append(
 			app.SelectInstanceExtensions,
 			app.window.GetRequiredInstanceExtensions()...,
 		)
-		appInfo := vks.ApplicationInfo{}.
-			WithDefaultSType().
-			WithApplication("tutorial-triangle", vks.MakeApiVersion(0, 0, 1, 0)).
-			WithEngine("NoEngine", vks.MakeApiVersion(0, 1, 0, 0)).
-			WithApiVersion(uint32(vks.VK_API_VERSION_1_3)).
-			AsCPtr()
-		defer appInfo.Free()
-		createInfo := vks.InstanceCreateInfo{}.
-			WithDefaultSType().
-			WithPApplicationInfo(appInfo).
-			WithFlags(vks.InstanceCreateFlags(vks.VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR)).
-			WithLayers(app.SelectInstanceLayers).
-			WithExtensions(extensions).
-			AsCPtr()
-		defer createInfo.Free()
+
+		appInfo := vks.CPtr(arp, &vks.ApplicationInfo{},
+			vks.SetEngine(arp, "NoEngine", vks.MakeApiVersion(0, 1, 0, 0)),
+			vks.SetApplication(arp, "tutorial-triangle", vks.MakeApiVersion(0, 0, 1, 0)),
+			vks.SetDefaultSType,
+			func(in *vks.ApplicationInfo) {
+				in.SetApiVersion(uint32(vks.VK_API_VERSION_1_3))
+			},
+		)
+		createInfo := vks.CPtr(arp, &vks.InstanceCreateInfo{},
+			vks.SetInstanceLayers(arp, app.SelectInstanceLayers),
+			vks.SetInstanceExtensions(arp, extensions),
+			vks.SetDefaultSType,
+			func(in *vks.InstanceCreateInfo) {
+				in.SetPApplicationInfo(appInfo)
+				in.SetFlags(vks.InstanceCreateFlags(vks.VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR))
+			},
+		)
 
 		// create the result object
 		var vkInstance vks.Instance
@@ -266,30 +269,25 @@ func (app *TriangleApplication) vulkanSetup() error {
 			// TODO see if there is a better way to chain the pnext
 			// calls and hide the unsafe.
 			phyDev := app.instance.MakePhysicalDeviceFacade(phyDev)
-			driverProps := vks.PhysicalDeviceDriverProperties{}.
-				WithDefaultSType().
-				AsCPtr()
-			defer driverProps.Free()
-			vulkan11Props := vks.PhysicalDeviceVulkan11Properties{}.
-				WithDefaultSType().
-				WithPNext(unsafe.Pointer(driverProps)).
-				AsCPtr()
-			defer vulkan11Props.Free()
-			vulkan12Props := vks.PhysicalDeviceVulkan12Properties{}.
-				WithDefaultSType().
-				WithPNext(unsafe.Pointer(vulkan11Props)).
-				AsCPtr()
-			defer vulkan12Props.Free()
-			vulkan13Props := vks.PhysicalDeviceVulkan13Properties{}.
-				WithDefaultSType().
-				WithPNext(unsafe.Pointer(vulkan12Props)).
-				AsCPtr()
-			defer vulkan13Props.Free()
-			props := vks.PhysicalDeviceProperties2{}.
-				WithDefaultSType().
-				WithPNext(unsafe.Pointer(vulkan13Props)).
-				AsCPtr()
-			defer props.Free()
+			driverProps := vks.CPtr(arp, &vks.PhysicalDeviceDriverProperties{},
+				vks.SetDefaultSType,
+			)
+			vulkan11Props := vks.CPtr(arp, &vks.PhysicalDeviceVulkan11Properties{},
+				vks.SetDefaultSType,
+				vks.SetPNext[*vks.PhysicalDeviceVulkan11Properties](driverProps),
+			)
+			vulkan12Props := vks.CPtr(arp, &vks.PhysicalDeviceVulkan12Properties{},
+				vks.SetDefaultSType,
+				vks.SetPNext[*vks.PhysicalDeviceVulkan12Properties](vulkan11Props),
+			)
+			vulkan13Props := vks.CPtr(arp, &vks.PhysicalDeviceVulkan13Properties{},
+				vks.SetDefaultSType,
+				vks.SetPNext[*vks.PhysicalDeviceVulkan13Properties](vulkan12Props),
+			)
+			props := vks.CPtr(arp, &vks.PhysicalDeviceProperties2{},
+				vks.SetDefaultSType,
+				vks.SetPNext[*vks.PhysicalDeviceProperties2](vulkan13Props),
+			)
 
 			phyDev.GetPhysicalDeviceProperties2(props)
 
@@ -425,14 +423,15 @@ func (app *TriangleApplication) vulkanSetup() error {
 				WithQueueFamilyIndex(idx).
 				WithPQueuePriorities(familyPriority[k])
 		}
-		queueCreateInfos = vks.DeviceQueueCreateInfoMakeCSlice(queueCreateInfos...)
-		defer vks.DeviceQueueCreateInfoFreeCSlice(queueCreateInfos)
+		queueCreateInfos = vks.DeviceQueueCreateInfoCSlice(arp, queueCreateInfos...)
 
-		deviceCreateInfo := vks.DeviceCreateInfo{}.
-			WithDefaultSType().
-			WithPQueueCreateInfos(queueCreateInfos).
-			WithExtensions(app.SelectDeviceExtensions).
-			AsCPtr()
+		deviceCreateInfo := vks.CPtr(arp, &vks.DeviceCreateInfo{},
+			vks.SetDefaultSType,
+			vks.SetDeviceExtensions(arp, app.SelectDeviceExtensions),
+			func(in *vks.DeviceCreateInfo) {
+				in.SetPQueueCreateInfos(queueCreateInfos)
+			},
+		)
 		// create the result object
 		var vkDevice vks.Device
 
@@ -461,11 +460,12 @@ func (app *TriangleApplication) vulkanSetup() error {
 	}
 
 	createCommandPool := func() error {
-		poolCreateInfo := vks.CommandPoolCreateInfo{}.
-			WithDefaultSType().
-			WithQueueFamilyIndex(app.graphicQueueIndex).
-			AsCPtr()
-		defer poolCreateInfo.Free()
+		poolCreateInfo := vks.CPtr(arp, &vks.CommandPoolCreateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.CommandPoolCreateInfo) {
+				in.SetQueueFamilyIndex(app.graphicQueueIndex)
+			},
+		)
 
 		var commandPool vks.CommandPool
 		result := app.device.CreateCommandPool(poolCreateInfo, nil, &commandPool)
@@ -483,10 +483,9 @@ func (app *TriangleApplication) vulkanSetup() error {
 	}
 
 	createSemaphoresAndFences := func() error {
-		semaphoreCreateInfo := vks.SemaphoreCreateInfo{}.
-			WithDefaultSType().
-			AsCPtr()
-		defer semaphoreCreateInfo.Free()
+		semaphoreCreateInfo := vks.CPtr(arp, &vks.SemaphoreCreateInfo{},
+			vks.SetDefaultSType,
+		)
 
 		imgAvail := make([]vks.Semaphore, app.FramesInFlight)
 		renderDone := make([]vks.Semaphore, app.FramesInFlight)
@@ -506,11 +505,12 @@ func (app *TriangleApplication) vulkanSetup() error {
 		app.imageAvailableSemaphores = imgAvail
 		app.renderFinishedSemaphores = renderDone
 
-		fenceCreateInfo := vks.FenceCreateInfo{}.
-			WithDefaultSType().
-			WithFlags(vks.FenceCreateFlags(vks.VK_FENCE_CREATE_SIGNALED_BIT)).
-			AsCPtr()
-		defer fenceCreateInfo.Free()
+		fenceCreateInfo := vks.CPtr(arp, &vks.FenceCreateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.FenceCreateInfo) {
+				in.SetFlags(vks.FenceCreateFlags(vks.VK_FENCE_CREATE_SIGNALED_BIT))
+			},
+		)
 
 		inFlightFences := make([]vks.Fence, app.FramesInFlight)
 
@@ -545,6 +545,9 @@ func (app *TriangleApplication) mainLoop() error {
 	return nil
 }
 func (app *TriangleApplication) drawFrame() error {
+	arp := vks.NewAutoReleaser()
+	defer arp.Release()
+
 	// Wait for Vulkan to finish with this frame.
 	app.device.WaitForFences(
 		1,
@@ -585,7 +588,7 @@ func (app *TriangleApplication) drawFrame() error {
 	// Note, the P values update count based on the slice.  but since I
 	// really only want it to use the first item in the slice, I update the
 	// count after updating the Pointer/slice.
-	submitInfos := vks.SubmitInfoMakeCSlice(
+	submitInfos := vks.SubmitInfoCSlice(arp,
 		vks.SubmitInfo{}.
 			WithDefaultSType().
 			WithPWaitSemaphores(app.imageAvailableSemaphores[app.currentFrame:]).
@@ -598,7 +601,6 @@ func (app *TriangleApplication) drawFrame() error {
 			WithPSignalSemaphores(app.renderFinishedSemaphores[app.currentFrame:]).
 			WithSignalSemaphoreCount(1),
 	)
-	defer vks.SubmitInfoFreeCSlice(submitInfos)
 
 	// Reset the fence for this frame.
 	app.device.ResetFences(
@@ -617,14 +619,15 @@ func (app *TriangleApplication) drawFrame() error {
 	}
 
 	// Create the present queue info object.
-	presentInfo := vks.PresentInfoKHR{}.
-		WithDefaultSType().
-		WithPWaitSemaphores(app.renderFinishedSemaphores[app.currentFrame:]).
-		WithWaitSemaphoreCount(1).
-		WithPSwapchains([]vks.SwapchainKHR{app.swapchain}).
-		WithPImageIndices([]uint32{imageIndex}).
-		AsCPtr()
-	defer presentInfo.Free()
+	presentInfo := vks.CPtr(arp, &vks.PresentInfoKHR{},
+		vks.SetDefaultSType,
+		func(in *vks.PresentInfoKHR) {
+			in.SetPWaitSemaphores(app.renderFinishedSemaphores[app.currentFrame:])
+			in.SetWaitSemaphoreCount(1)
+			in.SetPSwapchains([]vks.SwapchainKHR{app.swapchain})
+			in.SetPImageIndices([]uint32{imageIndex})
+		},
+	)
 
 	// Submit work to the present queue.
 	result = app.presentQueue.QueuePresentKHR(presentInfo)
@@ -641,6 +644,9 @@ func (app *TriangleApplication) drawFrame() error {
 	return nil
 }
 func (app *TriangleApplication) recreatePipeline() error {
+	arp := vks.NewAutoReleaser()
+	defer arp.Release()
+
 	width, height := app.window.GetFramebufferSize()
 	for width == 0 || height == 0 {
 		width, height = app.window.GetFramebufferSize()
@@ -737,25 +743,26 @@ func (app *TriangleApplication) recreatePipeline() error {
 		}
 
 		// TODO add a helper to simplify the queue family indicies array.
-		swapchainCreateInfo := vks.SwapchainCreateInfoKHR{}.
-			WithDefaultSType().
-			WithSurface(app.surface).
-			WithMinImageCount(imageCount).
-			WithImageFormat(selectedFormat.Format()).
-			WithImageColorSpace(selectedFormat.ColorSpace()).
-			WithImageExtent(selectedExtent).
-			WithImageArrayLayers(1).
-			WithImageUsage(vks.ImageUsageFlags(vks.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)).
-			WithImageSharingMode(shareMode).
-			WithQueueFamilyIndexCount(uint32(len(queueFamilyIndices))).
-			WithPQueueFamilyIndices(queueFamilyIndices).
-			WithPreTransform(capabilities.CurrentTransform()).
-			WithCompositeAlpha(vks.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR).
-			WithPresentMode(selectedMode).
-			WithClipped(vks.VK_TRUE).
-			WithOldSwapchain(oldSwapchain).
-			AsCPtr()
-		defer swapchainCreateInfo.Free()
+		swapchainCreateInfo := vks.CPtr(arp, &vks.SwapchainCreateInfoKHR{},
+			vks.SetDefaultSType,
+			func(in *vks.SwapchainCreateInfoKHR) {
+				in.SetSurface(app.surface)
+				in.SetMinImageCount(imageCount)
+				in.SetImageFormat(selectedFormat.Format())
+				in.SetImageColorSpace(selectedFormat.ColorSpace())
+				in.SetImageExtent(selectedExtent)
+				in.SetImageArrayLayers(1)
+				in.SetImageUsage(vks.ImageUsageFlags(vks.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+				in.SetImageSharingMode(shareMode)
+				in.SetQueueFamilyIndexCount(uint32(len(queueFamilyIndices)))
+				in.SetPQueueFamilyIndices(queueFamilyIndices)
+				in.SetPreTransform(capabilities.CurrentTransform())
+				in.SetCompositeAlpha(vks.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+				in.SetPresentMode(selectedMode)
+				in.SetClipped(vks.VK_TRUE)
+				in.SetOldSwapchain(oldSwapchain)
+			},
+		)
 
 		var swapchain vks.SwapchainKHR
 		result := app.device.CreateSwapchainKHR(swapchainCreateInfo, nil, &swapchain)
@@ -792,17 +799,18 @@ func (app *TriangleApplication) recreatePipeline() error {
 
 		imageViews := make([]vks.ImageView, len(app.swapchainImgs))
 		for k, img := range app.swapchainImgs {
-			imgViewCreateInfo := vks.ImageViewCreateInfo{}.
-				WithDefaultSType().
-				WithImage(img).
-				WithViewType(vks.VK_IMAGE_VIEW_TYPE_2D).
-				WithFormat(app.swapchainImgFmt).
-				WithSubresourceRange(vks.ImageSubresourceRange{}.
-					WithAspectMask(vks.ImageAspectFlags(vks.VK_IMAGE_ASPECT_COLOR_BIT)).
-					WithLevelCount(1).
-					WithLayerCount(1)).
-				AsCPtr()
-			defer imgViewCreateInfo.Free()
+			imgViewCreateInfo := vks.CPtr(arp, &vks.ImageViewCreateInfo{},
+				vks.SetDefaultSType,
+				func(in *vks.ImageViewCreateInfo) {
+					in.SetImage(img)
+					in.SetViewType(vks.VK_IMAGE_VIEW_TYPE_2D)
+					in.SetFormat(app.swapchainImgFmt)
+					in.SetSubresourceRange(vks.ImageSubresourceRange{}.
+						WithAspectMask(vks.ImageAspectFlags(vks.VK_IMAGE_ASPECT_COLOR_BIT)).
+						WithLevelCount(1).
+						WithLayerCount(1))
+				},
+			)
 			result = app.device.CreateImageView(imgViewCreateInfo, nil, &imageViews[k])
 			if result.IsError() {
 				return result.AsErr()
@@ -818,7 +826,7 @@ func (app *TriangleApplication) recreatePipeline() error {
 	}
 
 	createRenderPass := func() error {
-		attachments := vks.AttachmentDescriptionMakeCSlice(
+		attachments := vks.AttachmentDescriptionCSlice(arp,
 			vks.AttachmentDescription{}.
 				WithFormat(app.swapchainImgFmt).
 				WithSamples(vks.VK_SAMPLE_COUNT_1_BIT).
@@ -829,34 +837,32 @@ func (app *TriangleApplication) recreatePipeline() error {
 				WithInitialLayout(vks.VK_IMAGE_LAYOUT_UNDEFINED).
 				WithFinalLayout(vks.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR),
 		)
-		defer vks.AttachmentDescriptionFreeCSlice(attachments)
-		colorAttachments := vks.AttachmentReferenceMakeCSlice(
+		colorAttachments := vks.AttachmentReferenceCSlice(arp,
 			vks.AttachmentReference{}.
 				WithAttachment(0).
 				WithLayout(vks.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
 		)
-		defer vks.AttachmentReferenceFreeCSlice(colorAttachments)
-		subpasses := vks.SubpassDescriptionMakeCSlice(
+		subpasses := vks.SubpassDescriptionCSlice(arp,
 			vks.SubpassDescription{}.
 				WithPipelineBindPoint(vks.VK_PIPELINE_BIND_POINT_GRAPHICS).
 				WithPColorAttachments(colorAttachments),
 		)
-		defer vks.SubpassDescriptionFreeCSlice(subpasses)
-		dependencies := vks.SubpassDependencyMakeCSlice(
+		dependencies := vks.SubpassDependencyCSlice(arp,
 			vks.SubpassDependency{}.
 				WithSrcSubpass(vks.VK_SUBPASS_EXTERNAL).
 				WithSrcStageMask(vks.PipelineStageFlags(vks.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)).
 				WithDstStageMask(vks.PipelineStageFlags(vks.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)).
 				WithDstAccessMask(vks.AccessFlags(vks.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)),
 		)
-		defer vks.SubpassDependencyFreeCSlice(dependencies)
 
-		renderPassCreateInfo := vks.RenderPassCreateInfo{}.
-			WithDefaultSType().
-			WithPAttachments(attachments).
-			WithPSubpasses(subpasses).
-			WithPDependencies(dependencies).
-			AsCPtr()
+		renderPassCreateInfo := vks.CPtr(arp, &vks.RenderPassCreateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.RenderPassCreateInfo) {
+				in.SetPAttachments(attachments)
+				in.SetPSubpasses(subpasses)
+				in.SetPDependencies(dependencies)
+			},
+		)
 
 		var renderPass vks.RenderPass
 		result := app.device.CreateRenderPass(renderPassCreateInfo, nil, &renderPass)
@@ -876,15 +882,16 @@ func (app *TriangleApplication) recreatePipeline() error {
 		buffers := make([]vks.Framebuffer, len(app.swapchainImgViews))
 
 		for k, imgView := range app.swapchainImgViews {
-			bufferCreateInfo := vks.FramebufferCreateInfo{}.
-				WithDefaultSType().
-				WithRenderPass(app.renderPass).
-				WithPAttachments([]vks.ImageView{imgView}).
-				WithWidth(app.swapchainExtent.Width()).
-				WithHeight(app.swapchainExtent.Height()).
-				WithLayers(1).
-				AsCPtr()
-			defer bufferCreateInfo.Free()
+			bufferCreateInfo := vks.CPtr(arp, &vks.FramebufferCreateInfo{},
+				vks.SetDefaultSType,
+				func(in *vks.FramebufferCreateInfo) {
+					in.SetRenderPass(app.renderPass)
+					in.SetPAttachments([]vks.ImageView{imgView})
+					in.SetWidth(app.swapchainExtent.Width())
+					in.SetHeight(app.swapchainExtent.Height())
+					in.SetLayers(1)
+				},
+			)
 
 			result := app.device.CreateFramebuffer(bufferCreateInfo, nil, &buffers[k])
 			if result.IsError() {
@@ -902,10 +909,9 @@ func (app *TriangleApplication) recreatePipeline() error {
 	}
 
 	createPipelineLayout := func() error {
-		layoutInfo := vks.PipelineLayoutCreateInfo{}.
-			WithDefaultSType().
-			AsCPtr()
-		defer layoutInfo.Free()
+		layoutInfo := vks.CPtr(arp, &vks.PipelineLayoutCreateInfo{},
+			vks.SetDefaultSType,
+		)
 
 		var layout vks.PipelineLayout
 		result := app.device.CreatePipelineLayout(layoutInfo, nil, &layout)
@@ -926,12 +932,14 @@ func (app *TriangleApplication) recreatePipeline() error {
 			return err
 		}
 		vertWords := NewWordsUint32(vertBytes)
-		vertCreateInfo := vks.ShaderModuleCreateInfo{}.
-			WithDefaultSType().
-			WithCodeSize(vertWords.Sizeof()).
-			WithPCode(vertWords).
-			AsCPtr()
-		defer vertCreateInfo.Free()
+		vertCreateInfo := vks.CPtr(arp, &vks.ShaderModuleCreateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.ShaderModuleCreateInfo) {
+				in.SetCodeSize(vertWords.Sizeof())
+				in.SetPCode(vertWords)
+			},
+		)
+
 		var vertModule vks.ShaderModule
 		result := app.device.CreateShaderModule(vertCreateInfo, nil, &vertModule)
 		if result.IsError() {
@@ -944,12 +952,13 @@ func (app *TriangleApplication) recreatePipeline() error {
 			return err
 		}
 		fragWords := NewWordsUint32(fragBytes)
-		fragCreateInfo := vks.ShaderModuleCreateInfo{}.
-			WithDefaultSType().
-			WithCodeSize(fragWords.Sizeof()).
-			WithPCode(fragWords).
-			AsCPtr()
-		defer fragCreateInfo.Free()
+		fragCreateInfo := vks.CPtr(arp, &vks.ShaderModuleCreateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.ShaderModuleCreateInfo) {
+				in.SetCodeSize(fragWords.Sizeof())
+				in.SetPCode(fragWords)
+			},
+		)
 		var fragModule vks.ShaderModule
 		result = app.device.CreateShaderModule(fragCreateInfo, nil, &fragModule)
 		if result.IsError() {
@@ -957,9 +966,8 @@ func (app *TriangleApplication) recreatePipeline() error {
 		}
 		defer app.device.DestroyShaderModule(fragModule, nil)
 
-		name := vks.NewCString("main")
-		defer vks.FreeCString(name)
-		stages := vks.PipelineShaderStageCreateInfoMakeCSlice(
+		name := vks.NewCStr(arp, "main")
+		stages := vks.PipelineShaderStageCreateInfoCSlice(arp,
 			vks.PipelineShaderStageCreateInfo{}.
 				WithDefaultSType().
 				WithStage(vks.VK_SHADER_STAGE_VERTEX_BIT).
@@ -971,75 +979,75 @@ func (app *TriangleApplication) recreatePipeline() error {
 				WithModule(fragModule).
 				WithPName(name),
 		)
-		defer vks.PipelineShaderStageCreateInfoFreeCSlice(stages)
 
-		vertexInputState := vks.PipelineVertexInputStateCreateInfo{}.
-			WithDefaultSType().
-			AsCPtr()
-		defer vertexInputState.Free()
+		vertexInputState := vks.CPtr(arp, &vks.PipelineVertexInputStateCreateInfo{},
+			vks.SetDefaultSType,
+		)
 
-		inputAssemblyState := vks.PipelineInputAssemblyStateCreateInfo{}.
-			WithDefaultSType().
-			WithTopology(vks.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST).
-			WithPrimitiveRestartEnable(vks.VK_FALSE).
-			AsCPtr()
-		defer inputAssemblyState.Free()
+		inputAssemblyState := vks.CPtr(arp, &vks.PipelineInputAssemblyStateCreateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.PipelineInputAssemblyStateCreateInfo) {
+				in.SetTopology(vks.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+				in.SetPrimitiveRestartEnable(vks.VK_FALSE)
+			},
+		)
 
-		viewports := vks.ViewportMakeCSlice(
+		viewports := vks.ViewportCSlice(arp,
 			vks.Viewport{}.
 				WithWidth(float32(app.swapchainExtent.Width())).
 				WithHeight(float32(app.swapchainExtent.Height())).
 				WithMaxDepth(1.0),
 		)
-		defer vks.ViewportFreeCSlice(viewports)
-		scissors := vks.Rect2DMakeCSlice(
+		scissors := vks.Rect2DCSlice(arp,
 			vks.Rect2D{}.
 				WithExtent(app.swapchainExtent),
 		)
-		defer vks.Rect2DFreeCSlice(scissors)
 
-		viewportState := vks.PipelineViewportStateCreateInfo{}.
-			WithDefaultSType().
-			WithPViewports(viewports).
-			WithPScissors(scissors).
-			AsCPtr()
-		defer viewportState.Free()
+		viewportState := vks.CPtr(arp, &vks.PipelineViewportStateCreateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.PipelineViewportStateCreateInfo) {
+				in.SetPViewports(viewports)
+				in.SetPScissors(scissors)
+			},
+		)
 
-		rasterizationState := vks.PipelineRasterizationStateCreateInfo{}.
-			WithDefaultSType().
-			WithDepthClampEnable(vks.VK_FALSE).
-			WithRasterizerDiscardEnable(vks.VK_FALSE).
-			WithPolygonMode(vks.VK_POLYGON_MODE_FILL).
-			WithLineWidth(1.0).
-			WithCullMode(vks.CullModeFlags(vks.VK_CULL_MODE_BACK_BIT)).
-			WithFrontFace(vks.VK_FRONT_FACE_CLOCKWISE).
-			WithDepthBiasEnable(vks.VK_FALSE).
-			AsCPtr()
-		defer rasterizationState.Free()
+		rasterizationState := vks.CPtr(arp, &vks.PipelineRasterizationStateCreateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.PipelineRasterizationStateCreateInfo) {
+				in.SetDepthClampEnable(vks.VK_FALSE)
+				in.SetRasterizerDiscardEnable(vks.VK_FALSE)
+				in.SetPolygonMode(vks.VK_POLYGON_MODE_FILL)
+				in.SetLineWidth(1.0)
+				in.SetCullMode(vks.CullModeFlags(vks.VK_CULL_MODE_BACK_BIT))
+				in.SetFrontFace(vks.VK_FRONT_FACE_CLOCKWISE)
+				in.SetDepthBiasEnable(vks.VK_FALSE)
+			},
+		)
 
-		multisampleState := vks.PipelineMultisampleStateCreateInfo{}.
-			WithDefaultSType().
-			WithSampleShadingEnable(vks.VK_FALSE).
-			WithRasterizationSamples(vks.VK_SAMPLE_COUNT_1_BIT).
-			AsCPtr()
-		defer multisampleState.Free()
+		multisampleState := vks.CPtr(arp, &vks.PipelineMultisampleStateCreateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.PipelineMultisampleStateCreateInfo) {
+				in.SetSampleShadingEnable(vks.VK_FALSE)
+				in.SetRasterizationSamples(vks.VK_SAMPLE_COUNT_1_BIT)
+			},
+		)
 
-		colorBlendAttachmentState := vks.PipelineColorBlendAttachmentStateMakeCSlice(
+		colorBlendAttachmentState := vks.PipelineColorBlendAttachmentStateCSlice(arp,
 			vks.PipelineColorBlendAttachmentState{}.
-				WithColorWriteMask(vks.ColorComponentFlags(vks.VK_COLOR_COMPONENT_R_BIT | vks.VK_COLOR_COMPONENT_G_BIT | vks.VK_COLOR_COMPONENT_B_BIT | vks.VK_COLOR_COMPONENT_A_BIT)).
+				WithColorWriteMask(vks.ColorComponentFlags(vks.VK_COLOR_COMPONENT_R_BIT|vks.VK_COLOR_COMPONENT_G_BIT|vks.VK_COLOR_COMPONENT_B_BIT|vks.VK_COLOR_COMPONENT_A_BIT)).
 				WithBlendEnable(vks.VK_FALSE),
 		)
-		defer vks.PipelineColorBlendAttachmentStateFreeCSlice(colorBlendAttachmentState)
 
-		colorBlendState := vks.PipelineColorBlendStateCreateInfo{}.
-			WithDefaultSType().
-			WithLogicOpEnable(vks.VK_FALSE).
-			WithLogicOp(vks.VK_LOGIC_OP_COPY).
-			WithPAttachments(colorBlendAttachmentState).
-			AsCPtr()
-		defer colorBlendState.Free()
+		colorBlendState := vks.CPtr(arp, &vks.PipelineColorBlendStateCreateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.PipelineColorBlendStateCreateInfo) {
+				in.SetLogicOpEnable(vks.VK_FALSE)
+				in.SetLogicOp(vks.VK_LOGIC_OP_COPY)
+				in.SetPAttachments(colorBlendAttachmentState)
+			},
+		)
 
-		pipelineCreateInfos := vks.GraphicsPipelineCreateInfoMakeCSlice(
+		pipelineCreateInfos := vks.GraphicsPipelineCreateInfoCSlice(arp,
 			vks.GraphicsPipelineCreateInfo{}.
 				WithDefaultSType().
 				WithPStages(stages).
@@ -1052,7 +1060,6 @@ func (app *TriangleApplication) recreatePipeline() error {
 				WithLayout(app.pipelineLayout).
 				WithRenderPass(app.renderPass),
 		)
-		defer vks.GraphicsPipelineCreateInfoFreeCSlice(pipelineCreateInfos)
 
 		pipelines := make([]vks.Pipeline, len(pipelineCreateInfos))
 		result = app.device.CreateGraphicsPipelines(
@@ -1075,13 +1082,14 @@ func (app *TriangleApplication) recreatePipeline() error {
 	}
 
 	createCommandBuffers := func() error {
-		bufferAllocInfo := vks.CommandBufferAllocateInfo{}.
-			WithDefaultSType().
-			WithCommandPool(app.graphicCommandPool.H).
-			WithLevel(vks.VK_COMMAND_BUFFER_LEVEL_PRIMARY).
-			WithCommandBufferCount(uint32(len(app.swapchainFramebuffers))).
-			AsCPtr()
-		defer bufferAllocInfo.Free()
+		bufferAllocInfo := vks.CPtr(arp, &vks.CommandBufferAllocateInfo{},
+			vks.SetDefaultSType,
+			func(in *vks.CommandBufferAllocateInfo) {
+				in.SetCommandPool(app.graphicCommandPool.H)
+				in.SetLevel(vks.VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+				in.SetCommandBufferCount(uint32(len(app.swapchainFramebuffers)))
+			},
+		)
 
 		cmdBuffers := make([]vks.CommandBuffer, len(app.swapchainFramebuffers))
 		result := app.device.AllocateCommandBuffers(bufferAllocInfo, cmdBuffers)
@@ -1091,10 +1099,9 @@ func (app *TriangleApplication) recreatePipeline() error {
 
 		app.graphicCommandBuffers = cmdBuffers
 
-		beginInfo := vks.CommandBufferBeginInfo{}.
-			WithDefaultSType().
-			AsCPtr()
-		defer beginInfo.Free()
+		beginInfo := vks.CPtr(arp, &vks.CommandBufferBeginInfo{},
+			vks.SetDefaultSType,
+		)
 		for k, b := range app.graphicCommandBuffers {
 			buffer := app.graphicCommandPool.MakeCommandBufferFacade(b)
 
@@ -1108,14 +1115,15 @@ func (app *TriangleApplication) recreatePipeline() error {
 			clearValues := make([]vks.ClearValue, 1)
 			clearValues[0] = vks.MakeClearColorValueFloat32(0., 0., 0., 1.).AsClearValue()
 
-			renderPassBeginInfo := vks.RenderPassBeginInfo{}.
-				WithDefaultSType().
-				WithRenderPass(app.renderPass).
-				WithFramebuffer(app.swapchainFramebuffers[k]).
-				WithRenderArea(vks.Rect2D{}.WithExtent(app.swapchainExtent)).
-				WithPClearValues(clearValues).
-				AsCPtr()
-			defer renderPassBeginInfo.Free()
+			renderPassBeginInfo := vks.CPtr(arp, &vks.RenderPassBeginInfo{},
+				vks.SetDefaultSType,
+				func(in *vks.RenderPassBeginInfo) {
+					in.SetRenderPass(app.renderPass)
+					in.SetFramebuffer(app.swapchainFramebuffers[k])
+					in.SetRenderArea(vks.Rect2D{}.WithExtent(app.swapchainExtent))
+					in.SetPClearValues(clearValues)
+				},
+			)
 
 			buffer.CmdBeginRenderPass(renderPassBeginInfo, vks.VK_SUBPASS_CONTENTS_INLINE)
 			buffer.CmdBindPipeline(vks.VK_PIPELINE_BIND_POINT_GRAPHICS, app.pipelines[0])
